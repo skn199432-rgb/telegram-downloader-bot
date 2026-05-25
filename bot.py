@@ -1,35 +1,58 @@
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import glob
+import telebot
 import yt_dlp
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+bot = telebot.TeleBot(BOT_TOKEN)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ارسل رابط فيديو من تيك توك او يوتيوب")
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-async def download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
+@bot.message_handler(commands=["start"])
+def start(message):
+    bot.reply_to(message, "ارسل رابط فيديو من يوتيوب أو تيك توك أو تويتر/X ✅")
 
-    await update.message.reply_text("جاري التحميل...")
+@bot.message_handler(func=lambda message: True)
+def download_video(message):
+    url = message.text.strip()
 
-    ydl_opts = {
-        'format': 'best',
-        'outtmpl': 'video.%(ext)s'
-    }
+    if not url.startswith("http"):
+        bot.reply_to(message, "ارسل رابط صحيح يبدأ بـ http")
+        return
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        filename = ydl.prepare_filename(info)
+    wait = bot.reply_to(message, "جاري التحميل...")
 
-    await update.message.reply_video(video=open(filename, 'rb'))
+    try:
+        for f in glob.glob(f"{DOWNLOAD_DIR}/*"):
+            os.remove(f)
 
-    os.remove(filename)
+        opts = {
+            "outtmpl": f"{DOWNLOAD_DIR}/video.%(ext)s",
+            "format": "best[ext=mp4]/best",
+            "noplaylist": True,
+            "quiet": True,
+        }
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download))
+        files = glob.glob(f"{DOWNLOAD_DIR}/*")
+        if not files:
+            bot.edit_message_text("فشل التحميل.", message.chat.id, wait.message_id)
+            return
+
+        file_path = files[0]
+
+        bot.edit_message_text("تم التحميل، جاري الإرسال...", message.chat.id, wait.message_id)
+
+        with open(file_path, "rb") as video:
+            bot.send_video(message.chat.id, video)
+
+        os.remove(file_path)
+
+    except Exception:
+        bot.edit_message_text("فشل التحميل. الرابط قد يكون خاص أو الفيديو كبير.", message.chat.id, wait.message_id)
 
 print("Bot is running...")
-app.run_polling()
+bot.infinity_polling(skip_pending=True)
